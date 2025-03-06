@@ -4,7 +4,7 @@
   "main": "index.js",
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
-    "esBuild": "esbuild --bundle ./src/index.ts --platform=node > bundle.js"
+   "esBuild": "esbuild --bundle ./src/index.ts --platform=node --format=esm > bundle.js"
   },
   "type": "module",
   "bin": {

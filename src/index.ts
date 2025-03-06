@@ -8,7 +8,7 @@ const USER_AGENT = "weather-app/1.0";
 // Create server instance
 const server = new McpServer({
   name: "weather",
-  version: "1.0.0",
+    version: "1.0.0",
 });
 
 // Helper function for making NWS API requests
