@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-// import { McpServer } from "../node_modules/@modelcontextprotocol/sdk/dist/esm/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-// import { StdioServerTransport } from "../node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import express from "express";
 import { z } from "zod";
 
 const NWS_API_BASE = "https://api.weather.gov";
@@ -225,10 +224,65 @@ server.tool(
   }
 );
 
-export async function main() {
-  const transport = new StdioServerTransport();
+// Create Express app
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Map to store transports by connection ID
+const transports = new Map();
+
+// Handle SSE connections
+app.get("/sse", async (req, res) => {
+  const connectionId = Date.now().toString();
+  console.log(`New SSE connection established: ${connectionId}`);
+
+  // Set appropriate headers for SSE
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  // Create transport
+  const transport = new SSEServerTransport("/messages", res);
+  transports.set(connectionId, transport);
+
+  // Handle connection close
+  req.on("close", () => {
+    console.log(`SSE connection closed: ${connectionId}`);
+    transports.delete(connectionId);
+  });
+
+  // Connect server to transport
   await server.connect(transport);
-  return "Weather MCP Server running on stdio";
+});
+
+// Handle incoming messages
+app.use(express.json());
+app.post("/messages", async (req: any, res: any) => {
+  // Extract connection ID from request
+  // In a real implementation, you might use headers, query params, or path params
+  const connectionId = req.query.connectionId as string;
+  const transport = transports.get(connectionId);
+
+  if (!transport) {
+    return res.status(404).json({ error: "Connection not found" });
+  }
+
+  try {
+    await transport.handlePostMessage(req, res);
+  } catch (error) {
+    console.error("Error handling message:", error);
+    res.status(500).json({ error: "Failed to process message" });
+  }
+});
+
+// Serve static files (optional)
+app.use(express.static("public"));
+
+// Start server
+export async function main() {
+  app.listen(PORT, () => {
+    console.log(`Weather MCP Server running on http://localhost:${PORT}`);
+  });
 }
 
 main().catch((error) => {

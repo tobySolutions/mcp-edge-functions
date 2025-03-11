@@ -4836,8 +4836,8 @@ var Protocol = class {
    *
    * The Protocol object assumes ownership of the Transport, replacing any callbacks that have already been set, and expects that it is the only user of the Transport instance going forward.
    */
-  async connect(transport) {
-    this._transport = transport;
+  async connect(transport2) {
+    this._transport = transport2;
     this._transport.onclose = () => {
       this._onclose();
     };
@@ -6567,8 +6567,8 @@ var McpServer = class {
    *
    * The `server` object assumes ownership of the Transport, replacing any callbacks that have already been set, and expects that it is the only user of the Transport instance going forward.
    */
-  async connect(transport) {
-    return await this.server.connect(transport);
+  async connect(transport2) {
+    return await this.server.connect(transport2);
   }
   /**
    * Closes the connection.
@@ -6877,102 +6877,7 @@ var EMPTY_COMPLETION_RESULT = {
   }
 };
 
-// node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
-import process2 from "node:process";
-
-// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
-var ReadBuffer = class {
-  append(chunk) {
-    this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
-  }
-  readMessage() {
-    if (!this._buffer) {
-      return null;
-    }
-    const index = this._buffer.indexOf("\n");
-    if (index === -1) {
-      return null;
-    }
-    const line = this._buffer.toString("utf8", 0, index);
-    this._buffer = this._buffer.subarray(index + 1);
-    return deserializeMessage(line);
-  }
-  clear() {
-    this._buffer = void 0;
-  }
-};
-function deserializeMessage(line) {
-  return JSONRPCMessageSchema.parse(JSON.parse(line));
-}
-function serializeMessage(message) {
-  return JSON.stringify(message) + "\n";
-}
-
-// node_modules/@modelcontextprotocol/sdk/dist/esm/server/stdio.js
-var StdioServerTransport = class {
-  constructor(_stdin = process2.stdin, _stdout = process2.stdout) {
-    this._stdin = _stdin;
-    this._stdout = _stdout;
-    this._readBuffer = new ReadBuffer();
-    this._started = false;
-    this._ondata = (chunk) => {
-      this._readBuffer.append(chunk);
-      this.processReadBuffer();
-    };
-    this._onerror = (error) => {
-      var _a;
-      (_a = this.onerror) === null || _a === void 0 ? void 0 : _a.call(this, error);
-    };
-  }
-  /**
-   * Starts listening for messages on stdin.
-   */
-  async start() {
-    if (this._started) {
-      throw new Error("StdioServerTransport already started! If using Server class, note that connect() calls start() automatically.");
-    }
-    this._started = true;
-    this._stdin.on("data", this._ondata);
-    this._stdin.on("error", this._onerror);
-  }
-  processReadBuffer() {
-    var _a, _b;
-    while (true) {
-      try {
-        const message = this._readBuffer.readMessage();
-        if (message === null) {
-          break;
-        }
-        (_a = this.onmessage) === null || _a === void 0 ? void 0 : _a.call(this, message);
-      } catch (error) {
-        (_b = this.onerror) === null || _b === void 0 ? void 0 : _b.call(this, error);
-      }
-    }
-  }
-  async close() {
-    var _a;
-    this._stdin.off("data", this._ondata);
-    this._stdin.off("error", this._onerror);
-    const remainingDataListeners = this._stdin.listenerCount("data");
-    if (remainingDataListeners === 0) {
-      this._stdin.pause();
-    }
-    this._readBuffer.clear();
-    (_a = this.onclose) === null || _a === void 0 ? void 0 : _a.call(this);
-  }
-  send(message) {
-    return new Promise((resolve) => {
-      const json = serializeMessage(message);
-      if (this._stdout.write(json)) {
-        resolve();
-      } else {
-        this._stdout.once("drain", resolve);
-      }
-    });
-  }
-};
-
-// src/index.ts
+// src/function.ts
 var NWS_API_BASE = "https://api.weather.gov";
 var USER_AGENT = "weather-app/1.0";
 var server = new McpServer({
@@ -7132,15 +7037,258 @@ ${formattedForecast.join(
     };
   }
 );
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Weather MCP Server running on stdio");
+var connections = [];
+var messageQueue = [];
+var FleekTransport = class {
+  onMessageCallback = null;
+  isConnected = false;
+  // Required Transport interface methods
+  async start() {
+    this.isConnected = true;
+    console.log("FleekTransport started");
+  }
+  async close() {
+    this.isConnected = false;
+    console.log("FleekTransport closed");
+  }
+  async send(message) {
+    if (!this.isConnected) {
+      console.warn("Transport not connected, message not sent");
+      return;
+    }
+    messageQueue.push(message);
+    connections.forEach((conn) => {
+      try {
+        conn.messages.push(JSON.stringify(message));
+      } catch (error) {
+        console.error("Error sending message:", error);
+      }
+    });
+  }
+  async receive() {
+    return null;
+  }
+  // Method to handle incoming messages from HTTP endpoint
+  async handleIncomingMessage(message) {
+    if (this.onMessageCallback) {
+      this.onMessageCallback(message);
+    }
+  }
+  // Set message handler
+  onMessage(callback) {
+    this.onMessageCallback = callback;
+  }
+};
+var transport = new FleekTransport();
+var serverInitialized = false;
+async function initServer() {
+  if (!serverInitialized) {
+    try {
+      await server.connect(transport);
+      serverInitialized = true;
+      console.log("MCP Server initialized");
+    } catch (error) {
+      console.error("Failed to initialize server:", error);
+    }
+  }
 }
-main().catch((error) => {
-  console.error("Fatal error in main():", error);
-  process.exit(1);
-});
+function getConnectionId(params) {
+  if (params.path && params.path.includes("connectionId=")) {
+    const match = params.path.match(/[?&]connectionId=([^&]+)/);
+    if (match)
+      return match[1];
+  }
+  if (params.query && params.query.connectionId) {
+    return params.query.connectionId;
+  }
+  if (params.body && typeof params.body === "object" && params.body.connectionId) {
+    return params.body.connectionId;
+  }
+  try {
+    const url = new URL(`http://example.com${params.path}`);
+    const connId = url.searchParams.get("connectionId");
+    if (connId)
+      return connId;
+  } catch (e) {
+    console.error("Error parsing URL:", e);
+  }
+  return null;
+}
+function handleSSE(params) {
+  const connectionId = Date.now().toString();
+  const connection = {
+    id: connectionId,
+    messages: [],
+    lastEventId: 0
+  };
+  connections.push(connection);
+  console.log(`New connection established: ${connectionId}`);
+  console.log(`Total connections: ${connections.length}`);
+  let sseResponse = [
+    "Content-Type: text/event-stream",
+    "Cache-Control: no-cache",
+    "Connection: keep-alive",
+    "\n"
+  ].join("\n");
+  sseResponse += `event: connected
+data: {"connectionId":"${connectionId}"}
+
+`;
+  return {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    },
+    body: sseResponse
+  };
+}
+function getSSEMessages(connectionId, params) {
+  if (!connectionId) {
+    connectionId = getConnectionId(params);
+  }
+  if (!connectionId) {
+    console.error("Missing connectionId parameter in poll request");
+    console.log("Path:", params.path);
+    console.log("Query:", params.query);
+    return {
+      status: 400,
+      body: JSON.stringify({
+        error: "Missing connectionId parameter",
+        path: params.path,
+        query: params.query
+      })
+    };
+  }
+  const connection = connections.find((conn) => conn.id === connectionId);
+  if (!connection) {
+    console.error(`Connection not found: ${connectionId}`);
+    console.log(`Available connections: ${connections.map((c) => c.id).join(", ")}`);
+    return {
+      status: 404,
+      body: JSON.stringify({
+        error: "Connection not found",
+        connectionId,
+        availableConnections: connections.length
+      })
+    };
+  }
+  const messages = connection.messages;
+  connection.messages = [];
+  let response = "";
+  messages.forEach((msg, index) => {
+    const eventId = connection.lastEventId + index + 1;
+    response += `id: ${eventId}
+event: message
+data: ${msg}
+
+`;
+  });
+  connection.lastEventId += messages.length;
+  return {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive"
+    },
+    body: response || "event: ping\ndata: {}\n\n"
+    // Send empty ping if no messages
+  };
+}
+async function handleMessage(body, connectionId, params) {
+  if (!connectionId) {
+    connectionId = getConnectionId(params);
+  }
+  if (!connectionId) {
+    console.error("Missing connectionId parameter in message request");
+    console.log("Path:", params.path);
+    console.log("Body:", typeof body === "object" ? JSON.stringify(body) : body);
+    return {
+      status: 400,
+      body: JSON.stringify({
+        error: "Missing connectionId parameter",
+        details: "Please include connectionId in the URL query parameter or request body",
+        path: params.path
+      })
+    };
+  }
+  try {
+    const connection = connections.find((conn) => conn.id === connectionId);
+    if (!connection) {
+      console.error(`Connection not found: ${connectionId}`);
+      console.log(`Available connections: ${connections.map((c) => c.id).join(", ")}`);
+      return {
+        status: 404,
+        body: JSON.stringify({
+          error: "Connection not found",
+          connectionId,
+          availableConnections: connections.length
+        })
+      };
+    }
+    console.log(`Processing message for connection: ${connectionId}`);
+    console.log(`Message body:`, body);
+    const messageContent = body.type && body.name ? body : body.message || body;
+    await transport.handleIncomingMessage(messageContent);
+    return {
+      status: 200,
+      body: JSON.stringify({
+        status: "received",
+        connectionId
+      })
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    console.error("Error handling message:", error);
+    return {
+      status: 500,
+      body: JSON.stringify({
+        error: errorMessage,
+        connectionId
+      })
+    };
+  }
+}
+function logRequest(params) {
+  console.log(`Request: ${params.method} ${params.path}`);
+  console.log(`Headers: ${JSON.stringify(params.headers)}`);
+  if (params.body) {
+    console.log(`Body: ${typeof params.body === "object" ? JSON.stringify(params.body) : params.body}`);
+  }
+}
+var main = async (params) => {
+  logRequest(params);
+  await initServer();
+  const { method, path } = params;
+  const connectionId = getConnectionId(params);
+  console.log(`Extracted connectionId: ${connectionId || "none"}`);
+  if (path === "/sse" || path.startsWith("/sse?")) {
+    return handleSSE(params);
+  }
+  if ((path === "/messages" || path.startsWith("/messages?")) && method === "POST") {
+    return await handleMessage(params.body, connectionId, params);
+  }
+  if ((path === "/poll" || path.startsWith("/poll?")) && method === "GET") {
+    return getSSEMessages(connectionId, params);
+  }
+  return {
+    status: 200,
+    body: JSON.stringify({
+      message: "Weather MCP Server",
+      endpoints: {
+        "/sse": "Connect via SSE",
+        "/messages?connectionId={id}": "Send messages (POST)",
+        "/poll?connectionId={id}": "Poll for messages (GET)"
+      },
+      debug: {
+        path,
+        method,
+        connectionId: connectionId || "none",
+        activeConnections: connections.length
+      }
+    }, null, 2)
+  };
+};
 export {
   main
 };
